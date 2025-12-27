@@ -303,19 +303,38 @@ class TvDatafeed:
 
         return self.__create_df(raw_data, symbol)
 
-    def search_symbol(self, text: str, exchange: str = ''):
-        url = self.__search_url.format(text, exchange)
+    def search_symbol(self, symbol: str, exchange: str = ''):
+        url = self.__search_url.format(symbol, exchange)
 
         symbols_list = []
         try:
-            resp = requests.get(url)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Referer': 'https://www.tradingview.com/',
+                'Origin': 'https://www.tradingview.com'
+            }
+            resp = requests.get(url, headers=headers)
+            
+            if resp.status_code != 200:
+                logger.error(f"Search symbol failed with status: {resp.status_code}, content: {resp.text[:100]}")
 
             symbols_list = json.loads(resp.text.replace(
                 '</em>', '').replace('<em>', ''))
         except Exception as e:
-            logger.error(e)
+            logger.error(f"Exception in search_symbol: {e}")
 
         return symbols_list
+
+    def find_exchange(self, symbol: str):
+        """
+        Finds the exchange for a given symbol.
+        Returns the exchange of the first match found, or None if no match is found.
+        """
+        matches = self.search_symbol(symbol)
+        if matches:
+            return matches[0]['exchange']
+        return None
+
 
 
 if __name__ == "__main__":
