@@ -1,5 +1,7 @@
 import datetime
+import time
 import enum
+
 import json
 import logging
 import random
@@ -8,7 +10,6 @@ import string
 import pandas as pd
 from websocket import create_connection
 import requests
-import json
 
 logger = logging.getLogger(__name__)
 
@@ -229,81 +230,88 @@ class TvDatafeed:
 
         self.__create_connection()
 
-        self.__send_message("set_auth_token", [self.token])
-        self.__send_message("chart_create_session", [self.chart_session, ""])
-        self.__send_message("quote_create_session", [self.session])
-        self.__send_message(
-            "quote_set_fields",
-            [
-                self.session,
-                "ch",
-                "chp",
-                "current_session",
-                "description",
-                "local_description",
-                "language",
-                "exchange",
-                "fractional",
-                "is_tradable",
-                "lp",
-                "lp_time",
-                "minmov",
-                "minmove2",
-                "original_name",
-                "pricescale",
-                "pro_name",
-                "short_name",
-                "type",
-                "update_mode",
-                "volume",
-                "currency_code",
-                "rchp",
-                "rtc",
-            ],
-        )
+        try:
+            self.__send_message("set_auth_token", [self.token])
+            self.__send_message("chart_create_session", [self.chart_session, ""])
+            self.__send_message("quote_create_session", [self.session])
+            self.__send_message(
+                "quote_set_fields",
+                [
+                    self.session,
+                    "ch",
+                    "chp",
+                    "current_session",
+                    "description",
+                    "local_description",
+                    "language",
+                    "exchange",
+                    "fractional",
+                    "is_tradable",
+                    "lp",
+                    "lp_time",
+                    "minmov",
+                    "minmove2",
+                    "original_name",
+                    "pricescale",
+                    "pro_name",
+                    "short_name",
+                    "type",
+                    "update_mode",
+                    "volume",
+                    "currency_code",
+                    "rchp",
+                    "rtc",
+                ],
+            )
 
-        self.__send_message(
-            "quote_add_symbols", [self.session, symbol,
-                                  {"flags": ["force_permission"]}]
-        )
-        self.__send_message("quote_fast_symbols", [self.session, symbol])
+            self.__send_message(
+                "quote_add_symbols", [self.session, symbol,
+                                      {"flags": ["force_permission"]}]
+            )
+            self.__send_message("quote_fast_symbols", [self.session, symbol])
 
-        self.__send_message(
-            "resolve_symbol",
-            [
-                self.chart_session,
-                "symbol_1",
-                '={"symbol":"'
-                + symbol
-                + '","adjustment":"splits","session":'
-                + ('"regular"' if not extended_session else '"extended"')
-                + "}",
-            ],
-        )
-        self.__send_message(
-            "create_series",
-            [self.chart_session, "s1", "s1", "symbol_1", interval, n_bars],
-        )
-        self.__send_message("switch_timezone", [
-                            self.chart_session, "exchange"])
+            self.__send_message(
+                "resolve_symbol",
+                [
+                    self.chart_session,
+                    "symbol_1",
+                    '={"symbol":"'
+                    + symbol
+                    + '","adjustment":"splits","session":'
+                    + ('"regular"' if not extended_session else '"extended"')
+                    + "}",
+                ],
+            )
+            self.__send_message(
+                "create_series",
+                [self.chart_session, "s1", "s1", "symbol_1", interval, n_bars],
+            )
+            self.__send_message("switch_timezone", [
+                                self.chart_session, "exchange"])
 
-        raw_data = ""
+            raw_data = ""
 
-        logger.debug(f"getting data for {symbol}...")
-        while True:
-            try:
-                result = self.ws.recv()
-                raw_data = raw_data + result + "\n"
-            except Exception as e:
-                logger.error(e)
-                break
+            logger.debug(f"getting data for {symbol}...")
+            while True:
+                try:
+                    result = self.ws.recv()
+                    if isinstance(result, bytes):
+                        result = result.decode("utf-8")
+                    raw_data = raw_data + result + "\n"
+                except Exception as e:
+                    logger.error(e)
+                    break
 
-            if "series_completed" in result:
-                break
+                if "series_completed" in result:
+                    break
 
-        return self.__create_df(raw_data, symbol)
+            return self.__create_df(raw_data, symbol)
+        finally:
+            if self.ws:
+                self.ws.close()
 
     def search_symbol(self, symbol: str, exchange: str = ''):
+
         url = self.__search_url.format(symbol, exchange)
 
         symbols_list = []
@@ -335,6 +343,132 @@ class TvDatafeed:
             return matches[0]['exchange']
         return None
 
+
+    def get_quotes(self, symbols: list[str], timeout: float = 5.0):
+        """Get real-time quotes for a list of symbols.
+
+        Args:
+            symbols (list[str]): List of symbols (e.g., ["NSE:RELIANCE", "NASDAQ:AAPL"])
+            timeout (float, optional): Timeout in seconds. Defaults to 5.0.
+
+        Returns:
+            dict: Dictionary of quotes {symbol: {field: value, ...}}
+        """
+        unique_symbols = set(symbols)
+        self.__create_connection()
+        
+        try:
+            self.__send_message("set_auth_token", [self.token])
+            
+            # Setup session
+            self.__send_message("quote_create_session", [self.session])
+            self.__send_message(
+                "quote_set_fields",
+                [
+                    self.session,
+                    "ch",
+                    "chp",
+                    "lp",
+                    "lp_time",
+                    "status",
+                ],
+            )
+
+            # Add symbols
+            for symbol in unique_symbols:
+                self.__send_message(
+                    "quote_add_symbols", [self.session, symbol]
+                )
+
+            results = {}
+            start_time = time.time()
+            buffer = ""
+
+            while time.time() - start_time < timeout:
+                if len(results) >= len(unique_symbols):
+                    break
+
+                remaining = timeout - (time.time() - start_time)
+                if remaining <= 0:
+                    break
+                
+                try:
+                    self.ws.settimeout(remaining)
+                    data = self.ws.recv()
+                    if isinstance(data, bytes):
+                        data = data.decode("utf-8")
+                    buffer += data
+                except Exception:
+                    break
+                
+                while "~m~" in buffer:
+                    match = re.search(r"~m~(\d+)~m~", buffer)
+                    if not match:
+                        break
+                    
+                    header_len = len(match.group(0))
+                    msg_len = int(match.group(1))
+                    
+                    if len(buffer) < match.start() + header_len + msg_len:
+                        break
+                    
+                    msg_str = buffer[match.start() + header_len : match.start() + header_len + msg_len]
+                    buffer = buffer[match.start() + header_len + msg_len:]
+                    
+                    if not msg_str:
+                        continue
+                        
+                    try:
+                        if re.match(r"^\d+$", msg_str):
+                            continue
+                            
+                        msg = json.loads(msg_str)
+                        
+                        if not isinstance(msg, dict):
+                            continue
+                            
+                        func = msg.get("m")
+                        params = msg.get("p")
+                        
+                        if func == "qsd" and params and len(params) > 1:
+                            if params[0] == self.session:
+                                data_item = params[1]
+                                symbol_name = data_item.get("n")
+                                status = data_item.get("s")
+                                values = data_item.get("v")
+                                
+                                if symbol_name:
+                                    if symbol_name not in results:
+                                        results[symbol_name] = {}
+                                    
+                                    if status:
+                                        results[symbol_name]["status"] = status
+                                    
+                                    if values:
+                                        results[symbol_name].update(values)
+                        
+                        elif func == "quote_completed" and params and len(params) > 1:
+                            # Sometimes completion message comes differently or for other purposes
+                            # But specifically looking for error handling here if possible
+                            pass
+                        
+                        elif func == "quote_error" and params and len(params) > 1:
+                             if params[0] == self.session:
+                                 symbol_name = params[1]
+                                 error_desc = params[2] if len(params) > 2 else "Unknown error"
+                                 # We treat this as a result so we stop waiting for it
+                                 if symbol_name not in results:
+                                     results[symbol_name] = {}
+                                 results[symbol_name]["status"] = "error"
+                                 results[symbol_name]["error"] = error_desc
+
+                    except Exception as e:
+                        logger.debug(f"Error parsing message: {e}")
+        finally:
+            if self.ws:
+                self.ws.close()
+                
+        return results
 
 
 if __name__ == "__main__":

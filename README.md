@@ -1,48 +1,24 @@
-# **NOTE**
+# TvDatafeed
 
-> **This is an improved fork of TvDatafeed.**
->
-> - Windows compatibility: Dates before 1970 now work correctly when fetching historical data.
-> - Nologin method: Can fetch more than 5000 bars for some symbols (typically daily timeframe, e.g., XAUUSD:OANDA).
-> - See below for more details and usage notes.
+This is an improved fork of the original [TvDatafeed](https://github.com/rongardF/tvdatafeed.git) project.
 
----
-
-# **NOTE**
-
-This is a fork of the original [TvDatafeed](https://github.com/rongardF/tvdatafeed.git) project by StreamAlpha. This fork has live data retrieving feature implemented. 
-More information about this will be found in the TvDatafeedLive section down below in the README.
-
-# **TvDatafeed**
+Key changes in this fork:
+- Windows compatibility: dates before 1970 work correctly when fetching historical data.
+- Improved `nologin`: can fetch more than 5000 bars for some symbols (typically daily timeframe, e.g. `XAUUSD:OANDA`).
+- Batch real-time quotes: `TvDatafeed.get_quotes()` fetches many symbols over a single Quote Session WebSocket.
+- Bar-based live feed: `TvDatafeedLive` can monitor symbols and invoke callbacks when a new bar is produced.
 
 A simple TradingView historical Data Downloader. Tvdatafeed allows downloading upto 5000 bars on any of the supported timeframe.
 
-If you found the content useful and want to support my work, you can buy me a coffee!
-[![](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/StreamAlpha)
-
 ## Installation
 
-This module can be installed from github repo
+This module can be installed from a Git repo.
 
 ```sh
-pip install --upgrade --no-cache-dir git+https://github.com/rongardF/tvdatafeed.git
+pip install --upgrade --no-cache-dir git+https://github.com/gezmisozkan/tvdatafeed.git
 ```
 
-For usage instructions, watch these videos-
-
-v1.2 tutorial with installation and backtrader usage
-
-[![Watch the video](https://img.youtube.com/vi/f76dOZW2gwI/hqdefault.jpg)](https://youtu.be/f76dOZW2gwI)
-
-Full tutorial
-
-[![Watch the video](https://img.youtube.com/vi/qDrXmb2ZRjo/hqdefault.jpg)](https://youtu.be/qDrXmb2ZRjo)
-
----
-
-## About release 2.0.0
-
-Version 2.0.0 is a major release and is not backward compatible. make sure you update your code accordingly. Thanks to [stefanomorni](https://github.com/stefanomorni) for contributing and removing selenium dependancy.
+If you are using a fork, replace the URL with your fork URL.
 
 ## Usage
 
@@ -101,6 +77,44 @@ extended_price_data = tv.get_hist(symbol="EICHERMOT",exchange="NSE",interval=Int
 
 ---
 
+## Real-time Quotes
+
+For high-throughput real-time price checks across many assets, prefer `get_quotes()` over calling `get_hist()` in a loop.
+
+`get_quotes()` uses the TradingView Quote Session protocol and a single WebSocket connection for the full batch.
+
+```python
+quotes = tv.get_quotes([
+    'BINANCE:BTCUSDT',
+    'NASDAQ:AAPL',
+    'FX:USDTRY',
+])
+
+print(quotes['NASDAQ:AAPL'])
+```
+
+Return format:
+
+```python
+{
+  'NASDAQ:AAPL': {
+    'lp': 276.49,
+    'lp_time': 1770253196,
+    'ch': 7.01,
+    'chp': 2.6,
+    'status': 'ok'
+  },
+  'INVALID:SYMBOL': {
+    'status': 'error',
+    'error': '...'
+  }
+}
+```
+
+Fields requested: `lp`, `lp_time`, `ch`, `chp`, `status`.
+
+---
+
 ## Search Symbol
 
 To find the exact symbols for an instrument you can use `tv.search_symbol` method.
@@ -124,6 +138,8 @@ Indicators data is not downloaded from tradingview. For that you can use [TA-Lib
 ## Live feed (TvDatafeedLive)
 
 ### Description
+
+Note: for simple real-time price retrieval (many symbols), use `TvDatafeed.get_quotes()`.
 
 **TvDatafeedLive** is a sub-class of **TvDatafeed** to extend the functionality and provide live data feed feature. The live data feed feature means that the user can specify
 symbol, exchange and interval set (also called as seis) for which they want the new data bar to be retrieved from TradingView whenever it is produced. The user can then
@@ -239,6 +255,22 @@ data=seis.get_hist(n_bars=10, timeout=-1)
 
 ---
 
+## Performance & Benchmarks
+
+`benchmark_realtime.py` compares:
+- Method A: loop `get_hist(..., n_bars=1)` for spot prices (slow; new WS per symbol)
+- Method B: single `get_quotes([...])` call (fast; single WS)
+
+Run:
+
+```sh
+python benchmark_realtime.py
+```
+
+Typical results show a large speedup (often 10x+), depending on network conditions and symbol mix.
+
+---
+
 ## Supported Time Intervals
 
 Following timeframes intervals are supported-
@@ -273,18 +305,6 @@ Following timeframes intervals are supported-
 
 ## Read this before creating an issue
 
-Before creating an issue in this library, please follow the following steps.
-
-1. Search the problem you are facing is already asked by someone else. There might be some issues already there, either solved/unsolved related to your problem. Go to [issues](https://github.com/StreamAlpha/tvdatafeed/issues) page, use `is:issue` as filter and search your problem. ![image](https://user-images.githubusercontent.com/59556194/128167319-2654cfa1-f718-4a52-82f8-b0c0d26bf4ef.png)
-2. If you feel your problem is not asked by anyone or no issues are related to your problem, then create a new issue.
-3. Describe your problem in detail while creating the issue. If you don't have time to detail/describe the problem you are facing, assume that I also won't be having time to respond to your problem.
-4. Post a sample code of the problem you are facing. If I copy paste the code directly from issue, I should be able to reproduce the problem you are facing.
-5. Before posting the sample code, test your sample code yourself once. Only sample code should be tested, no other addition should be there while you are testing.
-6. Have some print() function calls to display the values of some variables related to your problem.
-7. Post the results of print() functions also in the issue.
-8. Use the insert code feature of github to inset code and print outputs, so that the code is displyed neat. !
-9. If you have multiple lines of code, use tripple grave accent ( ``` ) to insert multiple lines of code.
-
-   [Example:](https://docs.github.com/en/github/writing-on-github/creating-and-highlighting-code-blocks)
-
-   ![1659809630082](image/README/1659809630082.png)
+- Search existing issues first.
+- Include a minimal reproducible snippet (symbol/exchange/interval, login/nologin) and the full traceback/output.
+- Confirm the snippet reproduces on a clean environment (fresh venv).
