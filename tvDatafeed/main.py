@@ -137,7 +137,6 @@ class TvDatafeed:
             out = re.search(r'"s":\[(.+?)\}\]', raw_data).group(1)
             x = out.split(',{"')
             data = list()
-            volume_data = True
 
             epoch = datetime.datetime(1970, 1, 1)
 
@@ -159,19 +158,18 @@ class TvDatafeed:
 
                 row = [ts]
 
-                for i in range(5, 10):
-
-                    # skip converting volume data if does not exists
-                    if not volume_data and i == 9:
-                        row.append(0.0)
-                        continue
+                # Parse OHLC (indices 5-8)
+                for i in range(5, 9):
                     try:
                         row.append(float(xi[i]))
-
-                    except ValueError:
-                        volume_data = False
+                    except (ValueError, IndexError):
                         row.append(0.0)
-                        logger.debug('no volume data')
+
+                # Parse volume (index 9) independently per row
+                try:
+                    row.append(float(xi[9]))
+                except (ValueError, IndexError):
+                    row.append(0.0)
 
                 data.append(row)
 
@@ -228,16 +226,19 @@ class TvDatafeed:
 
         interval = interval.value
 
+        # Fresh sessions per call to avoid stale session issues
+        hist_chart_session = self.__generate_chart_session()
+        hist_quote_session = self.__generate_session()
         self.__create_connection()
 
         try:
             self.__send_message("set_auth_token", [self.token])
-            self.__send_message("chart_create_session", [self.chart_session, ""])
-            self.__send_message("quote_create_session", [self.session])
+            self.__send_message("chart_create_session", [hist_chart_session, ""])
+            self.__send_message("quote_create_session", [hist_quote_session])
             self.__send_message(
                 "quote_set_fields",
                 [
-                    self.session,
+                    hist_quote_session,
                     "ch",
                     "chp",
                     "current_session",
@@ -265,15 +266,15 @@ class TvDatafeed:
             )
 
             self.__send_message(
-                "quote_add_symbols", [self.session, symbol,
+                "quote_add_symbols", [hist_quote_session, symbol,
                                       {"flags": ["force_permission"]}]
             )
-            self.__send_message("quote_fast_symbols", [self.session, symbol])
+            self.__send_message("quote_fast_symbols", [hist_quote_session, symbol])
 
             self.__send_message(
                 "resolve_symbol",
                 [
-                    self.chart_session,
+                    hist_chart_session,
                     "symbol_1",
                     '={"symbol":"'
                     + symbol
@@ -284,10 +285,10 @@ class TvDatafeed:
             )
             self.__send_message(
                 "create_series",
-                [self.chart_session, "s1", "s1", "symbol_1", interval, n_bars],
+                [hist_chart_session, "s1", "s1", "symbol_1", interval, n_bars],
             )
             self.__send_message("switch_timezone", [
-                                self.chart_session, "exchange"])
+                                hist_chart_session, "exchange"])
 
             raw_data = ""
 
