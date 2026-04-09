@@ -33,7 +33,7 @@ class Interval(enum.Enum):
 class TvDatafeed:
     __sign_in_url = 'https://www.tradingview.com/accounts/signin/'
     __search_url = 'https://symbol-search.tradingview.com/symbol_search/?text={}&hl=1&exchange={}&lang=en&type=&domain=production'
-    __ws_headers = json.dumps({"Origin": "https://data.tradingview.com"})
+    __ws_headers = {"Origin": "https://data.tradingview.com"}
     __signin_headers = {'Referer': 'https://www.tradingview.com'}
     __ws_timeout = 5
 
@@ -355,17 +355,22 @@ class TvDatafeed:
             dict: Dictionary of quotes {symbol: {field: value, ...}}
         """
         unique_symbols = set(symbols)
+        # Fresh session per call to avoid stale session issues
+        quote_session = self.__generate_session()
         self.__create_connection()
-        
+
+        exit_reason = "completed"
+        symbol_arrival_times = {}
+
         try:
             self.__send_message("set_auth_token", [self.token])
-            
+
             # Setup session
-            self.__send_message("quote_create_session", [self.session])
+            self.__send_message("quote_create_session", [quote_session])
             self.__send_message(
                 "quote_set_fields",
                 [
-                    self.session,
+                    quote_session,
                     "ch",
                     "chp",
                     "lp",
@@ -374,10 +379,11 @@ class TvDatafeed:
                 ],
             )
 
-            # Add symbols
-            for symbol in unique_symbols:
+            # Add symbols — use sorted list for deterministic ordering
+            sorted_symbols = sorted(unique_symbols)
+            for symbol in sorted_symbols:
                 self.__send_message(
-                    "quote_add_symbols", [self.session, symbol]
+                    "quote_add_symbols", [quote_session, symbol]
                 )
 
             results = {}
@@ -390,75 +396,76 @@ class TvDatafeed:
 
                 remaining = timeout - (time.time() - start_time)
                 if remaining <= 0:
+                    exit_reason = "timeout"
                     break
-                
+
                 try:
                     self.ws.settimeout(remaining)
                     data = self.ws.recv()
                     if isinstance(data, bytes):
                         data = data.decode("utf-8")
                     buffer += data
-                except Exception:
+                except Exception as ws_err:
+                    exit_reason = f"ws_exception: {type(ws_err).__name__}: {ws_err}"
                     break
-                
+
                 while "~m~" in buffer:
                     match = re.search(r"~m~(\d+)~m~", buffer)
                     if not match:
                         break
-                    
+
                     header_len = len(match.group(0))
                     msg_len = int(match.group(1))
-                    
+
                     if len(buffer) < match.start() + header_len + msg_len:
                         break
-                    
+
                     msg_str = buffer[match.start() + header_len : match.start() + header_len + msg_len]
                     buffer = buffer[match.start() + header_len + msg_len:]
-                    
+
                     if not msg_str:
                         continue
-                        
+
                     try:
                         if re.match(r"^\d+$", msg_str):
                             continue
-                            
+
                         msg = json.loads(msg_str)
-                        
+
                         if not isinstance(msg, dict):
                             continue
-                            
+
                         func = msg.get("m")
                         params = msg.get("p")
-                        
+
                         if func == "qsd" and params and len(params) > 1:
-                            if params[0] == self.session:
+                            if params[0] == quote_session:
                                 data_item = params[1]
                                 symbol_name = data_item.get("n")
                                 status = data_item.get("s")
                                 values = data_item.get("v")
-                                
+
                                 if symbol_name:
                                     if symbol_name not in results:
                                         results[symbol_name] = {}
-                                    
+                                        symbol_arrival_times[symbol_name] = round(time.time() - start_time, 3)
+
                                     if status:
                                         results[symbol_name]["status"] = status
-                                    
+
                                     if values:
                                         results[symbol_name].update(values)
-                        
+
                         elif func == "quote_completed" and params and len(params) > 1:
-                            # Sometimes completion message comes differently or for other purposes
-                            # But specifically looking for error handling here if possible
                             pass
-                        
+
                         elif func == "quote_error" and params and len(params) > 1:
-                             if params[0] == self.session:
+                             if params[0] == quote_session:
                                  symbol_name = params[1]
                                  error_desc = params[2] if len(params) > 2 else "Unknown error"
-                                 # We treat this as a result so we stop waiting for it
                                  if symbol_name not in results:
                                      results[symbol_name] = {}
+                                     symbol_arrival_times[symbol_name] = round(time.time() - start_time, 3)
                                  results[symbol_name]["status"] = "error"
                                  results[symbol_name]["error"] = error_desc
 
@@ -467,7 +474,18 @@ class TvDatafeed:
         finally:
             if self.ws:
                 self.ws.close()
-                
+
+        elapsed = round(time.time() - start_time, 3)
+        missing = sorted(unique_symbols - set(results.keys()))
+
+        if missing or exit_reason != "completed":
+            logger.warning(
+                f"get_quotes: {len(results)}/{len(unique_symbols)} in {elapsed}s "
+                f"(exit: {exit_reason}). "
+                f"Missing: {missing}. "
+                f"Arrival order: {dict(sorted(symbol_arrival_times.items(), key=lambda x: x[1]))}"
+            )
+
         return results
 
 
